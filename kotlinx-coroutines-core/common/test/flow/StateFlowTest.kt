@@ -5,6 +5,7 @@
 package kotlinx.coroutines.flow
 
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
 import kotlin.test.*
 
 class StateFlowTest : TestBase() {
@@ -109,5 +110,57 @@ class StateFlowTest : TestBase() {
         fun inc() {
             _counter.value++
         }
+    }
+
+    @Test
+    public fun testOnSubscriptionWithException() = runTest {
+        expect(1)
+        val state = MutableStateFlow("A")
+        state
+            .onSubscription {
+                emit("collector->A")
+                state.value = "A"
+            }
+            .onSubscription {
+                emit("collector->B")
+                state.value = "B"
+                throw TestException()
+            }
+            .onStart {
+                emit("collector->C")
+                state.value = "C"
+            }
+            .onStart {
+                emit("collector->D")
+                state.value = "D"
+            }
+            .onEach {
+                when (it) {
+                    "collector->D" -> expect(2)
+                    "collector->C" -> expect(3)
+                    "collector->A" -> expect(4)
+                    "collector->B" -> expect(5)
+                    else -> expectUnreached()
+                }
+            }
+            .catch { e ->
+                assertTrue(e is TestException)
+                expect(6)
+            }
+            .launchIn(this)
+            .join()
+        assertEquals(0, state.subscriptionCount.value)
+        finish(7)
+    }
+
+    @Test
+    fun testOperatorFusion() {
+        val state = MutableStateFlow(String)
+        assertSame(state, (state as Flow<*>).cancellable())
+        assertSame(state, (state as Flow<*>).distinctUntilChanged())
+        assertSame(state, (state as Flow<*>).flowOn(Dispatchers.Default))
+        assertSame(state, (state as Flow<*>).conflate())
+        assertSame(state, state.buffer(Channel.CONFLATED))
+        assertSame(state, state.buffer(Channel.RENDEZVOUS))
     }
 }
