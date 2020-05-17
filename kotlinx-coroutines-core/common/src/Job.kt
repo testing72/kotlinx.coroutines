@@ -9,6 +9,7 @@
 package kotlinx.coroutines
 
 import kotlinx.coroutines.selects.*
+import kotlinx.coroutines.stdlib.*
 import kotlin.coroutines.*
 import kotlin.jvm.*
 
@@ -109,11 +110,15 @@ import kotlin.jvm.*
  * **`Job` interface and all its derived interfaces are not stable for inheritance in 3rd party libraries**,
  * as new methods might be added to this interface in the future, but is stable for use.
  */
-public interface Job : CoroutineContext.Element {
+public interface Job : CoroutineContext.Element, CancellationToken {
     /**
      * Key for [Job] instance in the coroutine context.
      */
-    public companion object Key : CoroutineContext.Key<Job> {
+    @OptIn(ExperimentalStdlibApi::class)
+    public companion object Key : AbstractCoroutineContextKey<CancellationToken, Job>(
+        CancellationToken,
+        { it as? Job }) {
+
         init {
             /*
              * Here we make sure that CoroutineExceptionHandler is always initialized in advance, so

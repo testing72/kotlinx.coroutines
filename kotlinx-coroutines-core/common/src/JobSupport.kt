@@ -9,6 +9,7 @@ import kotlinx.atomicfu.*
 import kotlinx.coroutines.internal.*
 import kotlinx.coroutines.intrinsics.*
 import kotlinx.coroutines.selects.*
+import kotlinx.coroutines.stdlib.*
 import kotlin.coroutines.*
 import kotlin.coroutines.intrinsics.*
 import kotlin.js.*
@@ -26,7 +27,13 @@ import kotlin.native.concurrent.*
  */
 @Deprecated(level = DeprecationLevel.ERROR, message = "This is internal API and may be removed in the future releases")
 public open class JobSupport constructor(active: Boolean) : Job, ChildJob, ParentJob, SelectClause0 {
-    final override val key: CoroutineContext.Key<*> get() = Job
+
+    override fun attach(continuation: StdlibCancellableContinuation<*>): Detach {
+        val detach = invokeOnCompletion(onCancelling = true) {
+            continuation.cancel(it)
+        }
+        return { detach.dispose() }
+    }
 
     /*
        === Internal states ===

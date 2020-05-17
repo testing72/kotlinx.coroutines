@@ -114,7 +114,8 @@ internal open class CancellableContinuationImpl<in T>(
         if (checkCompleted()) return
         if (parentHandle !== null) return // fast path 2 -- was already initialized
         val parent = delegate.context[Job] ?: return // fast path 3 -- don't do anything without parent
-        parent.start() // make sure the parent is started
+    // TODO seems to be the legacy
+//        parent.start() // make sure the parent is started
         val handle = parent.invokeOnCompletion(
             onCancelling = true,
             handler = ChildContinuation(parent, this).asHandler

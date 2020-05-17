@@ -6,6 +6,7 @@
 package kotlinx.coroutines
 
 import kotlinx.coroutines.selects.*
+import kotlinx.coroutines.stdlib.*
 import kotlin.coroutines.*
 
 /**
@@ -26,6 +27,10 @@ public object NonCancellable : AbstractCoroutineContextElement(Job), Job {
      */
     @InternalCoroutinesApi
     override val isActive: Boolean get() = true
+
+    // TODO
+    override val key: CoroutineContext.Key<*>
+        get() = Job
 
     /**
      * Always returns `false`.
@@ -78,6 +83,11 @@ public object NonCancellable : AbstractCoroutineContextElement(Job), Job {
     @InternalCoroutinesApi
     override fun invokeOnCompletion(handler: CompletionHandler): DisposableHandle =
         NonDisposableHandle
+
+    override fun attach(continuation: StdlibCancellableContinuation<*>): Detach {
+        // TODO
+        return {}
+    }
 
     /**
      * Always returns no-op handle.
