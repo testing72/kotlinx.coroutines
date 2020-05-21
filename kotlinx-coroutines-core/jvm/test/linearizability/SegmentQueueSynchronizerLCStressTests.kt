@@ -9,11 +9,92 @@ import kotlinx.atomicfu.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.internal.*
 import kotlinx.coroutines.internal.SegmentQueueSynchronizer.Mode.*
-import org.jetbrains.kotlinx.lincheck.*
 import org.jetbrains.kotlinx.lincheck.annotations.Operation
 import org.jetbrains.kotlinx.lincheck.verifier.*
 import org.junit.*
 import kotlin.coroutines.*
+
+/*
+  This test suite is not only but tests, but also provides a set of example
+  on how the `SegmentQueueSynchronizer` abstraction can be used for different
+  synchronization primitives.
+ */
+
+internal class SimpleMutex : SegmentQueueSynchronizer<Unit>(ASYNC) {
+    private val state = atomic(-1) // -1 -- locked, x>=0 -- number of waiters
+
+    fun isLocked() = state.value != -1
+
+    suspend fun lock() {
+        val s = state.getAndIncrement()
+        // Is the lock acquired?
+        if (s == -1) return
+        // Suspend otherwise
+        suspendAtomicCancellableCoroutineReusable<Unit> { cont ->
+            check(suspend(cont)) { "Should not fail in ASYNC mode" }
+        }
+    }
+
+    fun release() {
+        while (true) {
+            val s = state.getAndUpdate { cur ->
+                if (cur == -1) throw IllegalStateException("This mutex is unlocked")
+                cur - 1
+            }
+            if (s == 0) return // no waiters
+            if (tryResume(Unit)) return
+        }
+    }
+}
+
+class SimpleMutexLCSressTest : VerifierState() {
+    private val m = SimpleMutex()
+
+    @Operation
+    suspend fun lock() = m.lock()
+
+    @Operation(handleExceptionsAsResult = [IllegalStateException::class])
+    fun release() = m.release()
+
+    override fun extractState() = m.isLocked()
+
+    @Test
+    fun test() = LCStressOptionsDefault()
+        .actorsBefore(0)
+        .actorsAfter(0)
+        .check(this::class)
+
+}
+
+class SimpleMutexStressTest {
+    @Test
+    fun testSimple() = runBlocking {
+        val m = SimpleMutex()
+        check(!m.isLocked())
+        m.lock()
+        check(m.isLocked())
+        m.release()
+        check(!m.isLocked())
+    }
+
+    @Test
+    fun test() = runBlocking {
+        val t = 10
+        val n = 100_000
+        val m = SimpleMutex()
+        var c = 0
+        val jobs = (1..t).map { GlobalScope.launch {
+            repeat(n) {
+                m.lock()
+                c++
+                m.release()
+            }
+        } }
+        jobs.forEach { it.join() }
+        assert(c == n * t)
+    }
+}
+
 
 internal class SimpleCountDownLatch(count: Int) : SegmentQueueSynchronizer<Unit>(ASYNC) {
     private val count = atomic(count)
@@ -35,14 +116,40 @@ internal class SimpleCountDownLatch(count: Int) : SegmentQueueSynchronizer<Unit>
 
     suspend fun await() {
         // check whether the count has been reached zero
-        if (waiters.value and DONE_MARK != 0) return
+        if (remaining() == 0) return
         // add a new waiter (checking the counter again)
         val w = waiters.incrementAndGet()
         if (w and DONE_MARK != 0) return
         suspendCancellableCoroutine<Unit> { suspend(it) }
     }
+
+    fun remaining(): Int = count.value.coerceAtLeast(0)
 }
 private const val DONE_MARK = 1 shl 31
+
+abstract class AbstractSimpleCountDownLatchLCStressTest(count: Int) : VerifierState() {
+    private val cdl = SimpleCountDownLatch(count)
+
+    @Operation
+    fun countDown() = cdl.countDown()
+
+    @Operation
+    fun remaining() = cdl.remaining()
+
+    @Operation
+    suspend fun await() = cdl.await()
+
+    override fun extractState() = remaining()
+
+    @Test
+    fun test() = LCStressOptionsDefault()
+        .actorsBefore(0)
+        .actorsAfter(0)
+        .check(this::class)
+}
+class SimpleCountDownLatch1LCStressTest : AbstractSimpleCountDownLatchLCStressTest(1)
+class SimpleCountDownLatch2LCStressTest : AbstractSimpleCountDownLatchLCStressTest(2)
+
 
 internal class SimpleConflatedChannel<T : Any> : SegmentQueueSynchronizer<T>(SYNC) {
     private val state = atomic<Any?>(null) // null | element | WAITERS
@@ -142,8 +249,8 @@ internal class SimpleConflatedChannel<T : Any> : SegmentQueueSynchronizer<T>(SYN
 }
 private val WAITERS = Symbol("WAITERS")
 
-internal class SimpleConflatedChannelLCStressTest {
-    val c = SimpleConflatedChannel<Int>()
+class SimpleConflatedChannelLCStressTest {
+    private val c = SimpleConflatedChannel<Int>()
 
     @Operation
     fun send(e: Int) = c.send(e)
@@ -157,14 +264,10 @@ internal class SimpleConflatedChannelLCStressTest {
     @Test
     fun test() = LCStressOptionsDefault()
         .sequentialSpecification(SimpleConflatedChannelIntSpec::class.java)
-        .threads(3)
-        .invocationsPerIteration(100_000)
-        .actorsPerThread(4)
-        .logLevel(LoggingLevel.INFO)
         .check(this::class)
 }
 
-internal class SimpleConflatedChannelIntSpec : VerifierState() {
+class SimpleConflatedChannelIntSpec : VerifierState() {
     private val waiters = ArrayList<CancellableContinuation<Int>>()
     private var element = Int.MAX_VALUE
 
@@ -194,4 +297,38 @@ internal class SimpleConflatedChannelIntSpec : VerifierState() {
     }
 
     override fun extractState() = element
+}
+
+
+internal class SimpleCyclicBarrier(private val parties: Int) : SegmentQueueSynchronizer<Unit>(SYNC) {
+    private val arrived = atomic(0L)
+
+    suspend fun arrive() {
+        val a = arrived.incrementAndGet()
+        if (a % parties == 0L) {
+            repeat(parties - 1) {
+                while (!tryResume(Unit)) {}
+            }
+        } else {
+            suspendAtomicCancellableCoroutineReusable { cont ->
+                while (!suspend(cont)) {}
+            }
+        }
+    }
+}
+
+class SimpleCyclicBarrierLCStressTest : VerifierState() {
+    private val b = SimpleCyclicBarrier(3)
+
+    @Operation(cancellableOnSuspension = false)
+    suspend fun await() = b.arrive()
+
+    override fun extractState() = Unit
+
+    @Test
+    fun test() = LCStressOptionsDefault()
+        .actorsBefore(0)
+        .actorsAfter(0)
+        .threads(3)
+        .check(this::class)
 }

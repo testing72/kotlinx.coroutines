@@ -107,14 +107,14 @@ internal open class SegmentQueueSynchronizer<T>(val mode: Mode) {
                 return !segment.cas(i, value, BROKEN)
             }
             cellState === CANCELLED -> return false // the acquire was already cancelled
-            else -> return (cellState as CancellableContinuation<T>).tryResumeSQS(value)
+            else -> return (cellState as CancellableContinuation<T>).tryResume0(value)
         }
     }
 
     internal enum class Mode { SYNC, ASYNC }
 }
 
-private fun <T> CancellableContinuation<T>.tryResumeSQS(value: T): Boolean {
+private fun <T> CancellableContinuation<T>.tryResume0(value: T): Boolean {
     val token = tryResume(value) ?: return false
     completeResume(token)
     return true
