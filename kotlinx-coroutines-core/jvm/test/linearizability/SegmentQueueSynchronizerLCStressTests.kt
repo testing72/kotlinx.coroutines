@@ -301,30 +301,35 @@ class SimpleConflatedChannelIntSpec : VerifierState() {
 }
 
 
-internal class SimpleCyclicBarrier(private val parties: Int) : SegmentQueueSynchronizer<Unit>(SYNC) {
+internal class SimpleBarrier(private val parties: Int) : SegmentQueueSynchronizer<Boolean>(ASYNC) {
     private val arrived = atomic(0L)
 
-    suspend fun arrive() {
+    val done get() = arrived.value >= parties
+
+    suspend fun arrive(): Boolean {
         val a = arrived.incrementAndGet()
-        if (a % parties == 0L) {
-            repeat(parties - 1) {
-                while (!tryResume(Unit)) {}
+        return when {
+            a < parties -> {
+                suspendAtomicCancellableCoroutineReusable { cont -> suspend(cont) }
             }
-        } else {
-            suspendAtomicCancellableCoroutineReusable { cont ->
-                while (!suspend(cont)) {}
+            a == parties.toLong() -> {
+                repeat(parties - 1) {
+                    while (!tryResume(true)) {}
+                }
+                true
             }
+            else -> false
         }
     }
 }
 
-class SimpleCyclicBarrierLCStressTest : VerifierState() {
-    private val b = SimpleCyclicBarrier(3)
+class SimpleBarrierLCStressTest : VerifierState() {
+    private val b = SimpleBarrier(3)
 
     @Operation(cancellableOnSuspension = false)
-    suspend fun await() = b.arrive()
+    suspend fun arrive() = b.arrive()
 
-    override fun extractState() = Unit
+    override fun extractState() = b.done
 
     @Test
     fun test() = LCStressOptionsDefault()
