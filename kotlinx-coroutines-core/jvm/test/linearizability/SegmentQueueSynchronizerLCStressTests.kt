@@ -209,6 +209,7 @@ internal class SimpleConflatedChannel<T : Any> : SegmentQueueSynchronizer<T>(SYN
     }
 
     private suspend fun receiveSlowPath()  = suspendAtomicCancellableCoroutineReusable<T> sc@ { cont ->
+        if (suspend(cont)) return@sc
         while (true) {
             // Try to retrieve an element
             val e = tryReceive()
