@@ -424,6 +424,86 @@ class SharedFlowTest : TestBase() {
     }
 
     @Test
+    fun testRepeatedResetBufferWithReplay() = runTest {
+        val n = 10
+        val sh = MutableSharedFlow<Int>(n)
+        var i = 0
+        repeat(3) {
+            // collector is slow
+            val collector = sh.onEach { delay(Long.MAX_VALUE) }.launchIn(this)
+            val emitter = launch {
+                repeat(3 * n) { sh.emit(i); i++ }
+            }
+            repeat(3) { yield() } // enough to run it to suspension
+            assertEquals((i - n until i).toList(), sh.replayCache)
+            sh.resetBuffer()
+            repeat(3) { yield() } // enough to run it to suspension
+            assertEquals((i - n until i).toList(), sh.replayCache)
+            collector.cancel()
+            emitter.cancel()
+            repeat(3) { yield() } // enough to run it to suspension
+        }
+    }
+
+    @Test
+    fun testSynchronousSharedFlowEmitterCancel() = runTest {
+        expect(1)
+        val sh = MutableSharedFlow<Int>(0)
+        val barrier1 = Job()
+        val barrier2 = Job()
+        val barrier3 = Job()
+        val collector1 = sh.onEach {
+            when (it) {
+                1 ->  expect(3)
+                2 -> {
+                    expect(6)
+                    barrier2.complete()
+                }
+                3 -> {
+                    expect(9)
+                    barrier3.complete()
+                }
+                else -> expectUnreached()
+            }
+        }.launchIn(this)
+        val collector2 = sh.onEach {
+            when (it) {
+                1 -> {
+                    expect(4)
+                    barrier1.complete()
+                    delay(Long.MAX_VALUE)
+                }
+                else -> expectUnreached()
+            }
+        }.launchIn(this)
+        repeat(2) { yield() } // launch both subscribers
+        val emitter = launch(start = CoroutineStart.UNDISPATCHED) {
+            expect(2)
+            sh.emit(1)
+            barrier1.join()
+            expect(5)
+            sh.emit(2) // suspends because of slow collector2
+            expectUnreached() // will be cancelled
+        }
+        barrier2.join() // wait
+        expect(7)
+        // Now cancel the emitter!
+        emitter.cancel()
+        yield()
+        // Cancel slow collector
+        collector2.cancel()
+        yield()
+        // emit to fast collector1
+        expect(8)
+        sh.emit(3)
+        barrier3.join()
+        expect(10)
+        //  cancel it, too
+        collector1.cancel()
+        finish(11)
+    }
+
+    @Test
     fun testDifferentBufferedFlowCapacities() {
         for (replay in 0..10) {
             for (extraBufferCapacity in 0..5) {

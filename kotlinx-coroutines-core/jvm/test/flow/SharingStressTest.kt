@@ -7,6 +7,7 @@ package kotlinx.coroutines.flow
 import kotlinx.coroutines.*
 import org.junit.*
 import org.junit.Test
+import java.util.*
 import java.util.concurrent.atomic.*
 import kotlin.random.*
 import kotlin.test.*
@@ -60,19 +61,28 @@ class SharingStressTest : TestBase() {
     private fun testStress(replay: Int, started: SharingStarted) = runTest {
         val random = Random(1)
         val emitIndex = AtomicLong()
+        val cancelledEmits = HashSet<Long>()
+        val missingCollects = Collections.synchronizedSet(LinkedHashSet<Long>())
         // at most one copy of upstream can be running at any time
         val isRunning = AtomicInteger(0)
         val upstream = flow {
             assertEquals(0, isRunning.getAndIncrement())
             try {
                 while (true) {
-                    emit(emitIndex.getAndIncrement())
+                    val value = emitIndex.getAndIncrement()
+                    try {
+                        emit(value)
+                    } catch (e: CancellationException) {
+                        // emission was cancelled -> could be missing
+                        cancelledEmits.add(value)
+                        throw e
+                    }
                 }
             } finally {
                 assertEquals(1, isRunning.getAndDecrement())
             }
         }
-        val subCount = MutableStateFlow<Int>(0)
+        val subCount = MutableStateFlow(0)
         val sharingJob = Job()
         val sharingScope = this + emitterDispatcher + sharingJob
         val usingStateFlow = replay == 1
@@ -87,7 +97,7 @@ class SharingStressTest : TestBase() {
                 while (true) {
                     println("Staring $nSubscribers subscribers")
                     repeat(nSubscribers) {
-                        subscribers += launchSubscriber(sharedFlow, usingStateFlow, subCount)
+                        subscribers += launchSubscriber(sharedFlow, usingStateFlow, subCount, missingCollects)
                     }
                     // wait until they all subscribed
                     subCount.first { it == nSubscribers }
@@ -114,15 +124,21 @@ class SharingStressTest : TestBase() {
                 subscribers.forEach { it.job.cancelAndJoin() }
             }
         } finally {
-            println("Cancelling sharing job")
+            println("finally: Cancelling sharing job")
             sharingJob.cancel()
+        }
+        println("Emitter was cancelled ${cancelledEmits.size} times")
+        println("Collectors missed ${missingCollects.size} values")
+        for (value in missingCollects) {
+            assertTrue(value in cancelledEmits, "Value $value is missing for no apparent reason")
         }
     }
 
     private fun CoroutineScope.launchSubscriber(
         sharedFlow: SharedFlow<Long>,
         usingStateFlow: Boolean,
-        subCount: MutableStateFlow<Int>
+        subCount: MutableStateFlow<Int>,
+        missingCollects: MutableSet<Long>
     ): SubJob {
         val subJob = SubJob()
         subJob.job = launch(subscriberDispatcher) {
@@ -143,8 +159,17 @@ class SharingStressTest : TestBase() {
                         val expected = last + 1
                         if (usingStateFlow)
                             assertTrue(expected <= j)
-                        else
-                            assertEquals(expected, j)
+                        else {
+                            if (expected != j) {
+                                if (j == expected + 1) {
+                                    // if missing just one -- could be race with cancelled emit
+                                    missingCollects.add(expected)
+                                } else {
+                                    // broken otherwise
+                                    assertEquals(expected, j)
+                                }
+                            }
+                        }
                         last = j
                     }
                 }

@@ -445,8 +445,8 @@ private class SharedFlowImpl<T>(
         val buffer = buffer!!
         if (maxResumeCount > 0) { // collect emitters to resume if we have them
             resumeList = ArrayList(maxResumeCount)
-            var curEmitterIndex = head + bufferCapacity // what emitter to wakeup
-            while (resumeList.size < maxResumeCount) {
+            for (i in bufferCapacity until size) {
+                val curEmitterIndex = head + i // what emitter to try to wakeup
                 val emitter = buffer.getBufferAt(curEmitterIndex)
                 if (emitter !== NO_VALUE) {
                     emitter as Emitter // must have Emitter class
@@ -454,13 +454,16 @@ private class SharedFlowImpl<T>(
                     buffer.setBufferAt(curEmitterIndex, NO_VALUE) // make as canceled if we moved ahead
                     buffer.setBufferAt(curBufferEndIndex, emitter.value)
                     curBufferEndIndex++
+                    if (resumeList.size >= maxResumeCount) break
                 }
-                curEmitterIndex++
             }
         }
         // Compute new buffer size and new replay index
         val newBufferSize = (curBufferEndIndex - head).toInt() // how many values we now actually have
-        val newReplayIndex = curBufferEndIndex - minOf(replay, newBufferSize)
+        var newReplayIndex = curBufferEndIndex - minOf(replay, newBufferSize)
+        // adjustment for synchronous case with cancelled emitter (NO_VALUE)
+        if (bufferCapacity == 0 && newReplayIndex < head + size && buffer!!.getBufferAt(newReplayIndex) == NO_VALUE)
+            newReplayIndex++
         // now compute new head
         val newHead = if (nCollectors > 0) {
             // take slowest collector into account, and also keep replay cache for new collectors
@@ -481,8 +484,8 @@ private class SharedFlowImpl<T>(
     }
 
     private fun cleanupTailLocked() {
-        // Note: We leave the solve emitter's buffer index so that synchronous shared flow works correctly
-        if (size <= bufferCapacity + 1) return // nothing to do, no queued emitters or at most one
+        // If we have synchronous case, then keep one emitter's buffer index
+        if (bufferCapacity == 0 && size <= 1) return // return, don't clear it
         val buffer = buffer!!
         while (size > bufferCapacity && buffer.getBufferAt(head + size - 1) === NO_VALUE) {
             size--
