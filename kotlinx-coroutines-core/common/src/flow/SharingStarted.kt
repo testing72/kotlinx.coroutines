@@ -85,6 +85,7 @@ public interface SharingStarted {
 private class StartedEagerly : SharingStarted {
     private val alwaysStarted = unsafeDistinctFlow { emit(SharingCommand.START) }
     override fun commandFlow(subscriptionCount: StateFlow<Int>): Flow<SharingCommand> = alwaysStarted
+    override fun toString(): String = "SharingStarted.Eagerly"
 }
 
 private class StartedLazily : SharingStarted {
@@ -97,6 +98,8 @@ private class StartedLazily : SharingStarted {
             }
         }
     }
+
+    override fun toString(): String = "SharingStarted.Lazily"
 }
 
 private class StartedWhileSubscribed(
@@ -123,4 +126,13 @@ private class StartedWhileSubscribed(
         }
         .dropWhile { it != SharingCommand.START } // don't emit any STOP/RESET_BUFFER to start with, only START
         .distinctUntilChanged() // just in case somebody forgets it, don't leak our multiple sending of START
+
+    @OptIn(ExperimentalStdlibApi::class)
+    override fun toString(): String {
+        val params = buildList(2) {
+            if (stopTimeout > 0) add("stopTimeout=${stopTimeout}ms")
+            if (replayExpiration < Long.MAX_VALUE) add("replayExpiration=${replayExpiration}ms")
+        }
+        return "SharingStarted.WhileSubscribed(${params.joinToString()})"
+    }
 }

@@ -11,10 +11,14 @@ import java.util.*
 import java.util.concurrent.atomic.*
 import kotlin.random.*
 import kotlin.test.*
+import kotlin.time.*
+import kotlin.time.TimeSource
 
+@OptIn(ExperimentalTime::class)
 class SharingStressTest : TestBase() {
     private val testDuration = 1000L * stressTestMultiplier
     private val nSubscribers = 5
+    private val testStarted = TimeSource.Monotonic.markNow()
 
     @get:Rule
     val emitterDispatcher = ExecutorRule(1)
@@ -59,6 +63,7 @@ class SharingStressTest : TestBase() {
         testStress(1, started = SharingStarted.WhileSubscribed(replayExpirationMillis = 0L))
 
     private fun testStress(replay: Int, started: SharingStarted) = runTest {
+        log("-- Stress with replay=$replay, started=$started")
         val random = Random(1)
         val emitIndex = AtomicLong()
         val cancelledEmits = HashSet<Long>()
@@ -95,40 +100,41 @@ class SharingStressTest : TestBase() {
             withTimeoutOrNull(testDuration) {
                 // start and stop subscribers
                 while (true) {
-                    println("Staring $nSubscribers subscribers")
+                    log("Staring $nSubscribers subscribers")
                     repeat(nSubscribers) {
                         subscribers += launchSubscriber(sharedFlow, usingStateFlow, subCount, missingCollects)
                     }
                     // wait until they all subscribed
                     subCount.first { it == nSubscribers }
-                    // let them work a bit more
+                    // let them work a bit more & make sure emitter did not hang
                     val fromEmitIndex = emitIndex.get()
-                    for (attempt in 1..3) {
-                        delay(random.nextLong(50L..100L))
-                        if (emitIndex.get() > fromEmitIndex) break // Ok, something was emitted, wait more if not
+                    withTimeout(10000) { // wait for at most 10s for something to be emitted
+                        do {
+                            delay(random.nextLong(50L..100L))
+                        } while (emitIndex.get() == fromEmitIndex)  // Ok, something was emitted, wait more if not
                     }
-                    val emitted = emitIndex.get() - fromEmitIndex
-                    println("Stopping subscribers (emitted = $emitted)")
-                    assertTrue(emitted > 0)
+                    // Stop all subscribers and ensure check collected something
+                    log("Stopping subscribers (emitted = ${emitIndex.get() - fromEmitIndex})")
                     subscribers.forEach {
                         it.job.cancelAndJoin()
                         assertTrue { it.count > 0 } // something must be collected, too
                     }
                     subscribers.clear()
-                    println("Intermission")
+                    log("Intermission")
                     delay(random.nextLong(10L..100L)) // wait a bit before starting them again
                 }
             }
             if (!subscribers.isEmpty()) {
-                println("Stopping subscribers")
+                log("Stopping subscribers")
                 subscribers.forEach { it.job.cancelAndJoin() }
             }
         } finally {
-            println("finally: Cancelling sharing job")
+            log("--- Finally: Cancelling sharing job")
             sharingJob.cancel()
         }
-        println("Emitter was cancelled ${cancelledEmits.size} times")
-        println("Collectors missed ${missingCollects.size} values")
+        sharingJob.join() // make sure sharing job did not hang
+        log("Emitter was cancelled ${cancelledEmits.size} times")
+        log("Collectors missed ${missingCollects.size} values")
         for (value in missingCollects) {
             assertTrue(value in cancelledEmits, "Value $value is missing for no apparent reason")
         }
@@ -181,4 +187,6 @@ class SharingStressTest : TestBase() {
         lateinit var job: Job
         var count = 0L
     }
+
+    private fun log(msg: String) = println("${testStarted.elapsedNow().toLongMilliseconds()} ms: $msg")
 }
