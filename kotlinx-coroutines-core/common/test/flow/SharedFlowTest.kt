@@ -826,5 +826,40 @@ class SharedFlowTest : TestBase() {
         assertFailsWith<IllegalArgumentException> { MutableSharedFlow<Int>(0, initialValue = 0) }
         assertFailsWith<IllegalArgumentException> { MutableSharedFlow<Int>(0, extraBufferCapacity = 1, initialValue = 0) }
     }
+
+    @Test
+    public fun testReplayCancellability() = testCancellability(fromReplay = true)
+
+    @Test
+    public fun testEmitCancellability() = testCancellability(fromReplay = false)
+
+    private fun testCancellability(fromReplay: Boolean) = runTest {
+        expect(1)
+        val sh = MutableSharedFlow<Int>(5)
+        fun emitTestData() {
+            for (i in 1..5) assertTrue(sh.tryEmit(i))
+        }
+        if (fromReplay) emitTestData() // fill in replay first
+        var subscribed = true
+        val job = sh
+            .onSubscription { subscribed = true }
+            .onEach { i ->
+                when (i) {
+                    1 -> expect(2)
+                    2 -> expect(3)
+                    3 -> {
+                        expect(4)
+                        currentCoroutineContext().cancel()
+                    }
+                    else -> expectUnreached() // shall check for cancellation
+                }
+            }
+            .launchIn(this)
+        yield()
+        assertTrue(subscribed) // yielding in enough
+        if (!fromReplay) emitTestData() // emit after subscription
+        job.join()
+        finish(5)
+    }
 }
 
