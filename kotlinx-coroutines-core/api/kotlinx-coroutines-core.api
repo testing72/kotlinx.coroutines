@@ -618,8 +618,10 @@ public final class kotlinx/coroutines/channels/ChannelIterator$DefaultImpls {
 }
 
 public final class kotlinx/coroutines/channels/ChannelKt {
-	public static final fun Channel (I)Lkotlinx/coroutines/channels/Channel;
+	public static final synthetic fun Channel (I)Lkotlinx/coroutines/channels/Channel;
+	public static final fun Channel (ILkotlinx/coroutines/channels/BufferOverflow;)Lkotlinx/coroutines/channels/Channel;
 	public static synthetic fun Channel$default (IILjava/lang/Object;)Lkotlinx/coroutines/channels/Channel;
+	public static synthetic fun Channel$default (ILkotlinx/coroutines/channels/BufferOverflow;ILjava/lang/Object;)Lkotlinx/coroutines/channels/Channel;
 }
 
 public final class kotlinx/coroutines/channels/ChannelsKt {

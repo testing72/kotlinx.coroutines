@@ -162,7 +162,8 @@ public interface MutableSharedFlow<T> : SharedFlow<T>, FlowCollector<T> {
  * @param replay the number of values replayed to new subscribers (cannot be negative).
  * @param extraBufferCapacity the number of values buffered in addition to `replay`.
  *   [emit][SharedFlow.emit] does not suspend while there is a buffer space remaining (optional, cannot be negative, defaults to zero).
- * @param onBufferOverflow configures an action on buffer overflow (optional, defaults to [suspending][BufferOverflow.SUSPEND] emit call,
+ * @param onBufferOverflow configures an action on buffer overflow (optional, defaults to
+ *   [suspending][BufferOverflow.SUSPEND] attempt to [emit][MutableSharedFlow.emit] a value,
  *   supported only when `replay > 0` or `extraBufferCapacity > 0`).
  * @param initialValue the initial value in the replay cache (optional, defaults to nothing, supported only when `replay > 0`).
  *   This value is also used when shared flow buffer is [reset][MutableSharedFlow.reset].

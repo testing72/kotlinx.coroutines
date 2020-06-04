@@ -18,12 +18,12 @@ public enum class BufferOverflow {
     SUSPEND,
 
     /**
-     * Keep latest value on buffer overflow, drop oldest, do not suspend.
+     * Keep the latest value on buffer overflow, drop the oldest, do not suspend.
      */
     KEEP_LATEST,
 
     /**
-     * Drop latest value on buffer overflow, keep oldest, do not suspend.
+     * Drop the latest value on buffer overflow, keep the oldest, do not suspend.
      */
     DROP_LATEST
 }
