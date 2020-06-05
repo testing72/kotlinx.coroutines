@@ -178,9 +178,9 @@ public fun <T> MutableSharedFlow(
 ): MutableSharedFlow<T> {
     require(replay >= 0) { "replay cannot be negative" }
     require(extraBufferCapacity >= 0) { "extraBufferCapacity cannot be negative" }
-    require(replay > 0 || initialValue === NO_VALUE) { "replay must positive with initialValue" }
+    require(replay > 0 || initialValue === NO_VALUE) { "replay must be positive with initialValue" }
     require(replay > 0 || extraBufferCapacity > 0 || onBufferOverflow == BufferOverflow.SUSPEND) {
-        "replay or extraBufferCapacity must positive with non-default onBufferOverflow strategy"
+        "replay or extraBufferCapacity must be positive with non-default onBufferOverflow strategy"
     }
     val bufferCapacity0 = replay + extraBufferCapacity
     val bufferCapacity = if (bufferCapacity0 < 0) Int.MAX_VALUE else bufferCapacity0 // coerce to MAX_VALUE on overflow
@@ -216,7 +216,7 @@ private class SharedFlowImpl<T>(
     private val bufferCapacity: Int,
     private val onBufferOverflow: BufferOverflow,
     private val initialValue: Any?
-) : AbstractSharedFlow<SharedFlowSlot>(), MutableSharedFlow<T>, FusibleFlow<T>, CancellableFlow<T> {
+) : AbstractSharedFlow<SharedFlowSlot>(), MutableSharedFlow<T>, CancellableFlow<T>, FusibleFlow<T> {
     /*
         Logical structure of the buffer
 
@@ -618,14 +618,9 @@ private class SharedFlowImpl<T>(
         resumeList?.forEach { it.resume(Unit) }
     }
 
-    override fun fuse(context: CoroutineContext, capacity: Int): FusibleFlow<T> {
-        // context is irrelevant for shared flow and making additional rendezvous is meaningless
-        return when (capacity) {
-            Channel.RENDEZVOUS, Channel.OPTIONAL_CHANNEL -> this
-            else -> ChannelFlowOperatorImpl(this, context, capacity)
-        }
-    }
-
+    override fun fuse(context: CoroutineContext, capacity: Int, onBufferOverflow: BufferOverflow) =
+        fuseSharedFlow(context, capacity, onBufferOverflow)
+    
     private class Emitter(
         @JvmField val flow: SharedFlowImpl<*>,
         @JvmField val index: Long,
@@ -643,3 +638,18 @@ internal val NO_VALUE = Symbol("NO_VALUE")
 private fun Array<Any?>.getBufferAt(index: Long) = get(index.toInt() and (size - 1))
 private fun Array<Any?>.setBufferAt(index: Long, value: Any?) = set(index.toInt() and (size - 1), value)
 
+internal fun <T> SharedFlow<T>.fuseSharedFlow(
+    context: CoroutineContext,
+    capacity: Int,
+    onBufferOverflow: BufferOverflow
+): Flow<T> {
+    // context is irrelevant for shared flow and making additional rendezvous is meaningless
+    // however, additional buffering after shared flow could make sense for very slow subscribers
+    return when (capacity) {
+        Channel.RENDEZVOUS, Channel.OPTIONAL_CHANNEL -> {
+            assert { onBufferOverflow == BufferOverflow.SUSPEND } // can only have a default value
+            this
+        }
+        else -> ChannelFlowOperatorImpl(this, context, capacity, onBufferOverflow)
+    }
+}

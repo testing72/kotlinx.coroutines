@@ -580,13 +580,13 @@ public fun <E> Channel(capacity: Int = RENDEZVOUS, onBufferOverflow: BufferOverf
     when (capacity) {
         RENDEZVOUS -> {
             require(onBufferOverflow == BufferOverflow.SUSPEND) {
-                "capacity = RENDEZVOUS cannot be mixed non-default onBufferOverflow"
+                "RENDEZVOUS capacity cannot be used with non-default onBufferOverflow"
             }
             RendezvousChannel()
         }
         CONFLATED -> {
             require(onBufferOverflow == BufferOverflow.SUSPEND) {
-                "capacity = CONFLATED cannot be mixed non-default onBufferOverflow"
+                "CONFLATED capacity cannot be used with non-default onBufferOverflow"
             }
             ConflatedChannel()
         }

@@ -8,7 +8,9 @@ import kotlinx.coroutines.flow.*
 
 /**
  * An internal interface that marks the flow impls with distinct values, so that
- * application of [distinctUntilChanged] can be optimized away.
+ * application of [distinctUntilChanged] can be optimized away. A class implementing
+ * this interface can be conditionally distinct via [isDefaultEquivalence] without
+ * having to have multiple copies of the same code.
  */
 internal interface DistinctFlow<T> : Flow<T> {
     val isDefaultEquivalence: Boolean // true when using default equivalence

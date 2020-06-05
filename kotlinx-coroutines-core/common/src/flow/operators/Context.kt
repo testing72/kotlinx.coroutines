@@ -11,6 +11,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.channels.Channel.Factory.BUFFERED
 import kotlinx.coroutines.channels.Channel.Factory.CONFLATED
+import kotlinx.coroutines.channels.Channel.Factory.RENDEZVOUS
 import kotlinx.coroutines.flow.internal.*
 import kotlin.coroutines.*
 import kotlin.jvm.*
@@ -60,12 +61,20 @@ import kotlin.jvm.*
  * Q : -->---------- [2A] -- [2B] -- [2C] -->--  // collect
  * ```
  *
- * When operator's code takes time to execute this decreases the total execution time of the flow.
+ * When operator's code takes some time to execute this decreases the total execution time of the flow.
  * A [channel][Channel] is used between the coroutines to send elements emitted by the coroutine `P` to
  * the coroutine `Q`. If the code before `buffer` operator (in the coroutine `P`) is faster than the code after
  * `buffer` operator (in the coroutine `Q`), then this channel will become full at some point and will suspend
  * the producer coroutine `P` until the consumer coroutine `Q` catches up.
  * The [capacity] parameter defines the size of this buffer.
+ *
+ * ### Buffer overflow
+ *
+ * By default, emitter is suspended when buffer overflows to let collector catch up. This strategy can be
+ * overridden with an optional [onBufferOverflow] parameter so that emitter is never suspended. In this
+ * case, on buffer overflow the latest emitted value is either kept with [KEEP_LATEST][BufferOverflow.KEEP_LATEST]
+ * strategy, dropping the oldest value in buffer, or the latest emitted is dropped with
+ * [DROP_LATEST][BufferOverflow.DROP_LATEST] strategy, keeping the oldest value in buffer.
  *
  * ### Operator fusion
  *
@@ -76,9 +85,12 @@ import kotlin.jvm.*
  * which effectively requests a buffer of any size. Multiple requests with a specified buffer
  * size produce a buffer with the sum of the requested buffer sizes.
  *
+ * A `buffer` call with non-default value of [onBufferOverflow] parameter overrides all immediately preceding
+ * buffering operators, because it never suspends its upstream and thus no upstream buffer would ever be used.
+ *
  * ### Conceptual implementation
  *
- * The actual implementation of `buffer` is not trivial due to the fusing, but conceptually its
+ * The actual implementation of `buffer` is not trivial due to the fusing, but conceptually its basic
  * implementation is equivalent to the following code that can be written using [produce]
  * coroutine builder to produce a channel and [consumeEach][ReceiveChannel.consumeEach] extension to consume it:
  *
@@ -96,23 +108,41 @@ import kotlin.jvm.*
  *
  * ### Conflation
  *
- * Usage of this function with [capacity] of [Channel.CONFLATED][Channel.CONFLATED] is provided as a shortcut via
- * [conflate] operator. See its documentation for details.
+ * Usage of this function with [capacity] of [Channel.CONFLATED][Channel.CONFLATED] is a shortcut to
+ * `buffer(1, BufferOverflow.KEEP_LATEST)` and is available via
+ * a separate [conflate] operator. See its documentation for details.
  *
  * @param capacity type/capacity of the buffer between coroutines. Allowed values are the same as in `Channel(...)`
- * factory function: [BUFFERED][Channel.BUFFERED] (by default), [CONFLATED][Channel.CONFLATED],
- * [RENDEZVOUS][Channel.RENDEZVOUS], [UNLIMITED][Channel.UNLIMITED] or a non-negative value indicating
- * an explicitly requested size.
+ *   factory function: [BUFFERED][Channel.BUFFERED] (by default), [CONFLATED][Channel.CONFLATED],
+ *   [RENDEZVOUS][Channel.RENDEZVOUS], [UNLIMITED][Channel.UNLIMITED] or a non-negative value indicating
+ *   an explicitly requested size.
+ * @param onBufferOverflow configures an action on buffer overflow (optional, defaults to
+ *   [SUSPEND][BufferOverflow.SUSPEND], supported only when `capacity > 0` or `capacity = Channel.BUFFERED`).
  */
-public fun <T> Flow<T>.buffer(capacity: Int = BUFFERED): Flow<T> {
+@Suppress("NAME_SHADOWING")
+public fun <T> Flow<T>.buffer(capacity: Int = BUFFERED, onBufferOverflow: BufferOverflow = BufferOverflow.SUSPEND): Flow<T> {
     require(capacity >= 0 || capacity == BUFFERED || capacity == CONFLATED) {
         "Buffer size should be non-negative, BUFFERED, or CONFLATED, but was $capacity"
     }
+    require((capacity != RENDEZVOUS && capacity != CONFLATED) || onBufferOverflow == BufferOverflow.SUSPEND) {
+        "RENDEZVOUS or CONFLATED capacity cannot be used with non-default onBufferOverflow"
+    }
+    // desugar CONFLATED capacity to (1, KEEP_LATEST)
+    var capacity = capacity
+    var onBufferOverflow = onBufferOverflow
+    if (capacity == CONFLATED) {
+        capacity = 1
+        onBufferOverflow = BufferOverflow.KEEP_LATEST
+    }
+    // create a flow
     return when (this) {
-        is FusibleFlow -> fuse(capacity = capacity)
-        else -> ChannelFlowOperatorImpl(this, capacity = capacity)
+        is FusibleFlow -> fuse(capacity = capacity, onBufferOverflow = onBufferOverflow)
+        else -> ChannelFlowOperatorImpl(this, capacity = capacity, onBufferOverflow = onBufferOverflow)
     }
 }
+
+@Deprecated(level = DeprecationLevel.HIDDEN, message = "For binary compatibility")
+public fun <T> Flow<T>.buffer(capacity: Int = BUFFERED): Flow<T> = buffer(capacity)
 
 /**
  * Conflates flow emissions via conflated channel and runs collector in a separate coroutine.
@@ -138,7 +168,9 @@ public fun <T> Flow<T>.buffer(capacity: Int = BUFFERED): Flow<T> {
  * assertEquals(listOf(1, 10, 20, 30), result)
  * ```
  *
- * Note that `conflate` operator is a shortcut for [buffer] with `capacity` of [Channel.CONFLATED][Channel.CONFLATED].
+ * Note that `conflate` operator is a shortcut for [buffer] with `capacity` of [Channel.CONFLATED][Channel.CONFLATED],
+ * with is, in turn, a shortcut to a single-element buffer that only keeps the latest element as
+ * created by `buffer(1, `[`BufferOverflow.KEEP_LATEST`][BufferOverflow.KEEP_LATEST]`)`.
  *
  * ### Operator fusion
  *
@@ -213,10 +245,11 @@ public fun <T> Flow<T>.flowOn(context: CoroutineContext): Flow<T> {
  * the corresponding cancellation cause if flow collector was cancelled.
  * Note that [flow] builder and all implementations of [SharedFlow] are [cancellable] by default.
  */
-public fun <T> Flow<T>.cancellable(): Flow<T> {
-    if (this is CancellableFlow<*>) return this // Fast-path, already cancellable
-    return CancellableFlowImpl(this)
-}
+public fun <T> Flow<T>.cancellable(): Flow<T> =
+    when (this) {
+        is CancellableFlow<*> -> this // Fast-path, already cancellable
+        else -> CancellableFlowImpl(this)
+    }
 
 /**
  * Internal marker for flows that are [cancellable].

@@ -40,10 +40,11 @@ public fun <T : Any> Flow<T>.asPublisher(): Publisher<T> = FlowAsPublisher(this)
 private class PublisherAsFlow<T : Any>(
     private val publisher: Publisher<T>,
     context: CoroutineContext = EmptyCoroutineContext,
-    capacity: Int = Channel.BUFFERED
-) : ChannelFlow<T>(context, capacity) {
-    override fun create(context: CoroutineContext, capacity: Int): ChannelFlow<T> =
-        PublisherAsFlow(publisher, context, capacity)
+    capacity: Int = Channel.BUFFERED,
+    onBufferOverflow: BufferOverflow = BufferOverflow.SUSPEND
+) : ChannelFlow<T>(context, capacity, onBufferOverflow) {
+    override fun create(context: CoroutineContext, capacity: Int, onBufferOverflow: BufferOverflow): ChannelFlow<T> =
+        PublisherAsFlow(publisher, context, capacity, onBufferOverflow)
 
     /*
      * Suppress for Channel.CHANNEL_DEFAULT_CAPACITY.
@@ -52,13 +53,15 @@ private class PublisherAsFlow<T : Any>(
      */
     @Suppress("INVISIBLE_MEMBER", "INVISIBLE_REFERENCE")
     private val requestSize: Long
-        get() = when (capacity) {
-            Channel.CONFLATED -> Long.MAX_VALUE // request all and conflate incoming
-            Channel.RENDEZVOUS -> 1L // need to request at least one anyway
-            Channel.UNLIMITED -> Long.MAX_VALUE // reactive streams way to say "give all" must be Long.MAX_VALUE
-            Channel.BUFFERED -> Channel.CHANNEL_DEFAULT_CAPACITY.toLong()
-            else -> capacity.toLong().also { check(it >= 1) }
-        }
+        get() =
+            if (onBufferOverflow != BufferOverflow.SUSPEND) {
+                Long.MAX_VALUE // request all, since buffering strategy is to never suspend
+            } else when (capacity) {
+                Channel.RENDEZVOUS -> 1L // need to request at least one anyway
+                Channel.UNLIMITED -> Long.MAX_VALUE // reactive streams way to say "give all" must be Long.MAX_VALUE
+                Channel.BUFFERED -> Channel.CHANNEL_DEFAULT_CAPACITY.toLong()
+                else -> capacity.toLong().also { check(it >= 1) }
+            }
 
     override suspend fun collect(collector: FlowCollector<T>) {
         val collectContext = coroutineContext

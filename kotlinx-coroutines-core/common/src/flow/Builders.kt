@@ -328,10 +328,11 @@ public fun <T> callbackFlow(@BuilderInference block: suspend ProducerScope<T>.()
 private open class ChannelFlowBuilder<T>(
     private val block: suspend ProducerScope<T>.() -> Unit,
     context: CoroutineContext = EmptyCoroutineContext,
-    capacity: Int = BUFFERED
-) : ChannelFlow<T>(context, capacity) {
-    override fun create(context: CoroutineContext, capacity: Int): ChannelFlow<T> =
-        ChannelFlowBuilder(block, context, capacity)
+    capacity: Int = BUFFERED,
+    onBufferOverflow: BufferOverflow = BufferOverflow.SUSPEND
+) : ChannelFlow<T>(context, capacity, onBufferOverflow) {
+    override fun create(context: CoroutineContext, capacity: Int, onBufferOverflow: BufferOverflow): ChannelFlow<T> =
+        ChannelFlowBuilder(block, context, capacity, onBufferOverflow)
 
     override suspend fun collectTo(scope: ProducerScope<T>) =
         block(scope)
@@ -343,8 +344,9 @@ private open class ChannelFlowBuilder<T>(
 private class CallbackFlowBuilder<T>(
     private val block: suspend ProducerScope<T>.() -> Unit,
     context: CoroutineContext = EmptyCoroutineContext,
-    capacity: Int = BUFFERED
-) : ChannelFlowBuilder<T>(block, context, capacity) {
+    capacity: Int = BUFFERED,
+    onBufferOverflow: BufferOverflow = BufferOverflow.SUSPEND
+) : ChannelFlowBuilder<T>(block, context, capacity, onBufferOverflow) {
 
     override suspend fun collectTo(scope: ProducerScope<T>) {
         super.collectTo(scope)
@@ -364,6 +366,6 @@ private class CallbackFlowBuilder<T>(
         }
     }
 
-    override fun create(context: CoroutineContext, capacity: Int): ChannelFlow<T> =
-        CallbackFlowBuilder(block, context, capacity)
+    override fun create(context: CoroutineContext, capacity: Int, onBufferOverflow: BufferOverflow): ChannelFlow<T> =
+        CallbackFlowBuilder(block, context, capacity, onBufferOverflow)
 }

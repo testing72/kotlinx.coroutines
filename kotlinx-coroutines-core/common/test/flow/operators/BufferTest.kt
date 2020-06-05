@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2019 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license.
+ * Copyright 2016-2020 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license.
  */
 
 package kotlinx.coroutines.flow
@@ -9,13 +9,21 @@ import kotlinx.coroutines.channels.*
 import kotlin.math.*
 import kotlin.test.*
 
+/**
+ * A _behavioral_ test for buffering that is introduced by [buffer] operator to test that it is
+ * implemented properly and that adjacent [buffer] calls are conflated properly.
+ */
 class BufferTest : TestBase() {
-    private val n = 50 // number of elements to emit for test
+    private val n = 200 // number of elements to emit for test
     private val defaultBufferSize = 64 // expected default buffer size (per docs)
 
     // Use capacity == -1 to check case of "no buffer"
     private fun checkBuffer(capacity: Int, op: suspend Flow<Int>.() -> Flow<Int>) = runTest {
         expect(1)
+        /*
+           Channels perform full rendezvous. Sender does not suspend when there is a suspended receiver and vice-versa.
+           Thus, perceived batch size is +2 from capacity.
+         */
         val batchSize = capacity + 2
         flow {
             repeat(n) { i ->

@@ -116,8 +116,9 @@ private class ChannelAsFlow<T>(
     private val channel: ReceiveChannel<T>,
     private val consume: Boolean,
     context: CoroutineContext = EmptyCoroutineContext,
-    capacity: Int = Channel.OPTIONAL_CHANNEL
-) : ChannelFlow<T>(context, capacity) {
+    capacity: Int = Channel.OPTIONAL_CHANNEL,
+    onBufferOverflow: BufferOverflow = BufferOverflow.SUSPEND
+) : ChannelFlow<T>(context, capacity, onBufferOverflow) {
     private val consumed = atomic(false)
 
     private fun markConsumed() {
@@ -126,8 +127,8 @@ private class ChannelAsFlow<T>(
         }
     }
     
-    override fun create(context: CoroutineContext, capacity: Int): ChannelFlow<T> =
-        ChannelAsFlow(channel, consume, context, capacity)
+    override fun create(context: CoroutineContext, capacity: Int, onBufferOverflow: BufferOverflow): ChannelFlow<T> =
+        ChannelAsFlow(channel, consume, context, capacity, onBufferOverflow)
 
     override suspend fun collectTo(scope: ProducerScope<T>) =
         SendingCollector(scope).emitAllImpl(channel, consume) // use efficient channel receiving code from emitAll
@@ -154,7 +155,7 @@ private class ChannelAsFlow<T>(
         }
     }
 
-    override fun additionalToStringProps(): String = "channel=$channel, "
+    override fun additionalToStringProps(): String = "channel=$channel"
 }
 
 /**

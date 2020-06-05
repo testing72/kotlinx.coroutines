@@ -45,17 +45,53 @@ public fun <T> Flow<T>.shareIn(
     started: SharingStarted = SharingStarted.Eagerly,
     initialValue: T = NO_VALUE as T
 ): SharedFlow<T> {
+    val config = configureSharing()
     val shared = MutableSharedFlow<T>(
         replay = replay,
-        extraBufferCapacity = Channel.CHANNEL_DEFAULT_CAPACITY,
+        extraBufferCapacity = config.extraBufferCapacity,
+        onBufferOverflow = config.onBufferOverflow,
         initialValue = initialValue
     )
-    scope.launchSharing(this, shared, started)
+    scope.launchSharing(config.context, config.upstream, shared, started)
     return shared.asSharedFlow()
 }
 
-internal fun <T> CoroutineScope.launchSharing(upstream: Flow<T>, shared: MutableSharedFlow<T>, started: SharingStarted) {
-    launch { // the single coroutine to rule the sharing
+private class SharingConfig<T>(
+    val upstream: Flow<T>,
+    val extraBufferCapacity: Int,
+    val onBufferOverflow: BufferOverflow,
+    val context: CoroutineContext
+)
+
+// Decomposes upstream flow to fuse with it when possible
+private fun <T> Flow<T>.configureSharing(): SharingConfig<T> = when {
+    this is ChannelFlowOperatorImpl -> // pure flowOn+buffer operator combo without any loaded features is decomposed
+        SharingConfig(
+            upstream = flow,
+            extraBufferCapacity = when (capacity) {
+                Channel.OPTIONAL_CHANNEL, Channel.BUFFERED -> Channel.CHANNEL_DEFAULT_CAPACITY
+                else -> capacity
+            },
+            onBufferOverflow = onBufferOverflow,
+            context = this.context
+        )
+    else ->
+        SharingConfig(
+            upstream = this,
+            extraBufferCapacity = Channel.CHANNEL_DEFAULT_CAPACITY,
+            onBufferOverflow = BufferOverflow.SUSPEND,
+            context = EmptyCoroutineContext
+        )
+}
+
+// Launches sharing coroutine
+private fun <T> CoroutineScope.launchSharing(
+    context: CoroutineContext,
+    upstream: Flow<T>,
+    shared: MutableSharedFlow<T>,
+    started: SharingStarted
+) {
+    launch(context) { // the single coroutine to rule the sharing
         try {
             started.commandFlow(shared.subscriptionCount)
                 .distinctUntilChanged()
@@ -100,8 +136,9 @@ public fun <T> Flow<T>.stateIn(
     started: SharingStarted = SharingStarted.Eagerly,
     initialValue: T
 ): StateFlow<T> {
+    val config = configureSharing()
     val state = MutableStateFlow(initialValue)
-    scope.launchSharing(this, state, started)
+    scope.launchSharing(config.context, config.upstream, state, started)
     return state.asStateFlow()
 }
 
@@ -114,13 +151,18 @@ public fun <T> Flow<T>.stateIn(
  */
 @ExperimentalCoroutinesApi
 public suspend fun <T> Flow<T>.stateIn(scope: CoroutineScope): StateFlow<T> {
+    val config = configureSharing()
     val result = CompletableDeferred<StateFlow<T>>()
-    scope.launchSharingDeferred(this, result)
+    scope.launchSharingDeferred(config.context, config.upstream, result)
     return result.await()
 }
 
-private fun <T> CoroutineScope.launchSharingDeferred(upstream: Flow<T>, result: CompletableDeferred<StateFlow<T>>) {
-    launch {
+private fun <T> CoroutineScope.launchSharingDeferred(
+    context: CoroutineContext,
+    upstream: Flow<T>,
+    result: CompletableDeferred<StateFlow<T>>
+) {
+    launch(context) {
         var state: MutableStateFlow<T>? = null
         upstream.collect { value ->
             state?.let { it.value = value } ?: run {
@@ -139,14 +181,31 @@ private fun <T> CoroutineScope.launchSharingDeferred(upstream: Flow<T>, result: 
  */
 @ExperimentalCoroutinesApi
 public fun <T> MutableSharedFlow<T>.asSharedFlow(): SharedFlow<T> =
-    object : SharedFlow<T> by this {}
+    ReadonlySharedFlow(this)
 
 /**
  * Represents this mutable state flow as read-only state flow.
  */
 @ExperimentalCoroutinesApi
 public fun <T> MutableStateFlow<T>.asStateFlow(): StateFlow<T> =
-    object : StateFlow<T> by this {}
+    ReadonlyStateFlow(this)
+
+private class ReadonlySharedFlow<T>(
+    flow: SharedFlow<T>
+) : SharedFlow<T> by flow, CancellableFlow<T>, FusibleFlow<T> {
+    override fun fuse(context: CoroutineContext, capacity: Int, onBufferOverflow: BufferOverflow) =
+        fuseSharedFlow(context, capacity, onBufferOverflow)
+}
+
+private class ReadonlyStateFlow<T>(
+    flow: StateFlow<T>
+) : StateFlow<T> by flow, CancellableFlow<T>, FusibleFlow<T>, DistinctFlow<T> {
+    override val isDefaultEquivalence: Boolean
+        get() = true
+
+    override fun fuse(context: CoroutineContext, capacity: Int, onBufferOverflow: BufferOverflow) =
+        fuseStateFlow(context, capacity, onBufferOverflow)
+}
 
 // -------------------------------- onSubscription --------------------------------
 

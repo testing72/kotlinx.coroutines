@@ -250,7 +250,7 @@ private class StateFlowSlot : AbstractSharedFlowSlot<StateFlowImpl<*>>() {
 
 private class StateFlowImpl<T>(
     private val initialState: Any // T | NULL
-) : AbstractSharedFlow<StateFlowSlot>(), MutableStateFlow<T>, FusibleFlow<T>, DistinctFlow<T>, CancellableFlow<T> {
+) : AbstractSharedFlow<StateFlowSlot>(), MutableStateFlow<T>, DistinctFlow<T>, CancellableFlow<T>, FusibleFlow<T> {
     private val _state = atomic(initialState) // T | NULL
     private var sequence = 0 // serializes updates, value update is in process when sequence is odd
 
@@ -354,14 +354,8 @@ private class StateFlowImpl<T>(
     override fun createSlot() = StateFlowSlot()
     override fun createSlotArray(size: Int): Array<StateFlowSlot?> = arrayOfNulls(size)
 
-    override fun fuse(context: CoroutineContext, capacity: Int): FusibleFlow<T> {
-        // context is irrelevant for state flow and it is always conflated
-        // so it should not do anything unless buffering is requested
-        return when (capacity) {
-            Channel.CONFLATED, Channel.RENDEZVOUS, Channel.OPTIONAL_CHANNEL -> this
-            else -> ChannelFlowOperatorImpl(this, context, capacity)
-        }
-    }
+    override fun fuse(context: CoroutineContext, capacity: Int, onBufferOverflow: BufferOverflow) =
+        fuseStateFlow(context, capacity, onBufferOverflow)
 }
 
 internal fun MutableStateFlow<Int>.increment(delta: Int) {
@@ -369,4 +363,15 @@ internal fun MutableStateFlow<Int>.increment(delta: Int) {
         val current = value
         if (compareAndSet(current, current + delta)) return
     }
+}
+
+internal fun <T> StateFlow<T>.fuseStateFlow(
+    context: CoroutineContext,
+    capacity: Int,
+    onBufferOverflow: BufferOverflow
+): Flow<T> {
+    // state flow is always conflated so additional conflation does not have effect
+    assert { capacity != Channel.CONFLATED } // should be desugared by callers
+    if (capacity == 1 && onBufferOverflow == BufferOverflow.KEEP_LATEST) return this
+    return fuseSharedFlow(context, capacity, onBufferOverflow)
 }
