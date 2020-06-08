@@ -6,6 +6,7 @@ package kotlinx.coroutines.flow
 
 import kotlinx.coroutines.*
 import org.junit.*
+import org.junit.Ignore
 import org.junit.Test
 import java.util.*
 import java.util.concurrent.atomic.*
@@ -43,6 +44,7 @@ class SharingStressTest : TestBase() {
         testStress(100, started = SharingStarted.WhileSubscribed)
 
     @Test
+    @Ignore // ignore until the future support for resetBuffer/replayExpirationMillis future is determined
     public fun testReplay100WhileSubscribedReset() =
         testStress(100, started = SharingStarted.WhileSubscribed(replayExpirationMillis = 0L))
 
